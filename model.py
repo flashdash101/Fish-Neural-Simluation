@@ -6,12 +6,6 @@ import math
 from collections import deque
 import random
 import torch.optim as optim
-import pygame
-from .Initial import *
-from collections import deque
-#Implement a replay buffer to store the fish's experiences and use them to train the neural network
-
-#Implmement the Replay Buffer class
 from collections import deque
 
 
@@ -75,7 +69,7 @@ class DQNAgent:
 
 
 #Define the epsilon greedy action selection method for the DQN agent
-    def act(self, state):
+    def greedy_action(self, state):
         state = torch.from_numpy(state).float().unsqueeze(0)
         self.qnetwork_local.eval()
         with torch.no_grad():
