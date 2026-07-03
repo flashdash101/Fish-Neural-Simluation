@@ -99,6 +99,7 @@ def generate_rays_fan(view_position, direction, fov, num=20):
     return rays 
 
 def unique_points_from_segments(segments):
+    segments = np.array(segments, dtype=float)
     all_points = segments.reshape(-1, 2)
     return np.unique(all_points, axis=0)
 
@@ -134,27 +135,44 @@ def segments_from_box(p1, p2):
     s.append([[x1,y2],[x1,y1]])
     return s
 
+
+#Define the segments that make up the shark shape based on its center and angle
 def segments_from_shark(center, angle):
-    x1, y1 = center
-    body_length = 150
-    body_height = 60
-    tail_length = 50
+   x,y = center
+   body_length = 150
+   body_height = 60
+   tail_length = 50
 
-    body_points = [
-        (x1 - body_length * 0.5, y1),
-        (x1 - body_length * 0.25, y1 + body_height * 0.5),
-        (x1 + body_length * 0.28, y1 + body_height * 0.43),
-        (x1 + body_length * 0.5, y1),
-        (x1 + body_length * 0.28, y1 - body_height * 0.43),
-        (x1 - body_length * 0.25, y1 - body_height * 0.5),
-    ]
-    segments = []
-    for i in range(len(body_points)):
-        p1 = body_points[i]
-        p2 = body_points[(i + 1) % len(body_points)]
-        segments.append((p1, p2))
+   direction = (math.cos(angle), math.sin(angle))
+   perpendicular = (-direction[1], direction[0])
 
-    return segments
+   def point(forward, side):
+       return (
+           x + direction[0] * forward + perpendicular[0] * side,
+           y + direction[1] * forward + perpendicular[1] * side,
+       )
+   
+   body_points = [
+         point(-body_length * 0.5, 0),
+          point(-body_length * 0.25, body_height * 0.5),
+          point(body_length * 0.28, body_height * 0.43),
+          point(body_length * 0.5, 0),
+          point(body_length * 0.28, -body_height * 0.43),
+          point(-body_length * 0.25, -body_height * 0.5),
+     ]
+   
+   tail_base = point(-body_length * 0.5, 0)
+   tail_top = point(-body_length * 0.5 - tail_length, tail_length * 0.65)
+   tail_bottom = point(-body_length * 0.5 - tail_length, -tail_length * 0.65)
+   
+   segments = []
+   for i in range(len(body_points)):
+        segments.append([body_points[i], body_points[(i + 1) % len(body_points)]])
+   segments.append([tail_base, tail_top])
+   segments.append([tail_base, tail_bottom])
+
+
+   return segments
 
 
 
@@ -215,7 +233,7 @@ def draw_shark(surface, center, angle):
 
 
 
-
+#Probably not efficient, but it works for now. Draws the fish shape based on its center and angle
 
 def draw_fish(surface, center, angle):
     x, y = center
@@ -279,9 +297,7 @@ def main():
    
     segments = []
     #Include shark and fish in the segments list
-    segments += segments_from_box((BOX_MARGIN, BOX_MARGIN), (WIDTH - BOX_MARGIN, HEIGHT - BOX_MARGIN))
-    segments += segments_from_shark((shark_x, shark_y), shark_heading)
-    segments = np.array(segments)
+    
     points = unique_points_from_segments(segments)
 
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -341,10 +357,14 @@ def main():
             shark_turn_timer = 0
 
         shark_heading = math.atan2(shark_vy, shark_vx)
-
-            
+        #Always 
+        segments = segments_from_box((BOX_MARGIN, BOX_MARGIN), (WIDTH - BOX_MARGIN, HEIGHT - BOX_MARGIN))
+        shark_segments = segments_from_shark((shark_x, shark_y), shark_heading)
+        segments.extend(shark_segments)
+        segments = np.array(segments, dtype=float)    
 
         rays = generate_rays_fan((fish_x, fish_y), fish_heading, fov=math.pi / 2, num=20)
+        
         intersections = raycast_rays_segments(rays, segments)
         closest_intersections = closest_intersection_from_raycast_rays_segments(intersections)
 
