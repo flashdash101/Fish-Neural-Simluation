@@ -4,6 +4,7 @@ import sys
 import pygame
 import numpy as np
 from random import randint
+import torch
 
 WIDTH, HEIGHT = 800, 600
 BG_COLOR = (18, 24, 38)
@@ -87,6 +88,14 @@ def generate_rays_circle(view_position, num=100):
     rays[:, 1, 1] = view_position[1] + np.sin(angles)
     return rays
 
+
+#Function to calculate the relative distance between two points in 2D space
+def calculate_relative_distance(x1, y1, x2, y2):
+    return np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+
+#Function to calculate the relvative angle between two points in 2D space
+def calculate_relative_angle(x1, y1, x2, y2):
+    return np.arctan2(y2 - y1, x2 - x1)
 
 def generate_rays_fan(view_position, direction, fov, num=20):
     angles = np.linspace(-fov/2, fov/2, num=num) + direction
@@ -364,7 +373,11 @@ def main():
         segments = np.array(segments, dtype=float)    
 
         rays = generate_rays_fan((fish_x, fish_y), fish_heading, fov=math.pi / 2, num=20)
-        
+        #Every 1000 frames, print the distance and angle between the fish and shark
+        if pygame.time.get_ticks() % 1000 == 0:
+            print(f"The distance between the fish and shark is: {calculate_relative_distance(fish_x, fish_y, shark_x, shark_y)}")
+            print(f"The angle between the fish and shark is: {calculate_relative_angle(fish_x, fish_y, shark_x, shark_y)}")
+
         intersections = raycast_rays_segments(rays, segments)
         closest_intersections = closest_intersection_from_raycast_rays_segments(intersections)
 
