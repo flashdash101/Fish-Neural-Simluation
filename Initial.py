@@ -7,6 +7,7 @@ from random import randint
 import torch
 import torch.nn as nn
 import torch.nn.functional as F 
+from .model import DQNAgent, ReplayBuffer, QNetwork
 
 WIDTH, HEIGHT = 800, 600
 BG_COLOR = (18, 24, 38)
@@ -149,6 +150,16 @@ def segments_from_box(p1, p2):
     s.append([[x2,y2],[x1,y2]])
     s.append([[x1,y2],[x1,y1]])
     return s
+
+#Create actions to turn left, turn right, up, down and speed up etc.
+def crweate_actions():
+    actions = []
+    actions.append([1,0,0,0,0]) #turn left
+    actions.append([0,1,0,0,0]) #turn right
+    actions.append([0,0,1,0,0]) #up
+    actions.append([0,0,0,1,0]) #down
+    actions.append([0,0,0,0,1]) #speed up
+    return actions
 
 
 #Define the segments that make up the shark shape based on its center and angle
@@ -299,8 +310,10 @@ def draw_fish(surface, center, angle):
     eye_position = point(body_length * 0.18, -body_height * 0.14)
     pygame.draw.circle(surface, EYE_COLOR, (int(eye_position[0]), int(eye_position[1])), 4)
 
+#In main we willcreate the environment and run the simulation, we will also create the DQN agent and the replay buffer, and use them to train the fish to avoid the shark
 
 def main():
+    reward = 0
     pygame.init()
     shark_x = BOX_MARGIN + 120
     shark_y = HEIGHT - BOX_MARGIN - 120
