@@ -5,6 +5,8 @@ import pygame
 import numpy as np
 from random import randint
 import torch
+import torch.nn as nn
+import torch.nn.functional as F 
 
 WIDTH, HEIGHT = 800, 600
 BG_COLOR = (18, 24, 38)
@@ -25,6 +27,10 @@ returns the intersection point of the ray and the segment if they intersect, oth
 
 
 """
+
+
+
+        
 
 
 def raycast_ray_segment(ray, segment):
