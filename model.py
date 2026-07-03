@@ -68,6 +68,9 @@ class DQNAgent:
         self.memory = ReplayBuffer(self.buffer_size, self.batch_size)
 
 
+
+
+
 #Define the epsilon greedy action selection method for the DQN agent
     def greedy_action(self, state):
         state = torch.from_numpy(state).float().unsqueeze(0)
@@ -80,6 +83,9 @@ class DQNAgent:
             return np.argmax(action_values.cpu().data.numpy())
         else:
             return random.choice(np.arange(self.action_size))
+        
+    def decay_epsilon(self):
+        self.epsilon = max(self.epsilon_min, self.epsilon_decay * self.epsilon)
         
 
     #It's time to learn! Implement the learn method for the DQN agent that will sample a batch of experiences from the replay buffer and use them to update the Q network
