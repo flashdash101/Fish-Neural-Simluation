@@ -408,14 +408,14 @@ def reset_positions():
     return fish_x, fish_y, fish_heading, shark_x, shark_y, shark_vx, shark_vy
 
 
-
+#Plot progress from 0 to n episodes, with a moving average of 10 episodes for easier reading.
 def plot_scores(episode_scores, episode_losses):
     import matplotlib.pyplot as plt
-    import matplotlib.patches as patches
+
 
     episodes = np.arange(1, len(episode_scores) + 1)
     # Smooth rewards with a moving average for easier reading
-    window = 20
+    window = 10
     if len(episode_scores) >= window:
         reward_ma = np.convolve(episode_scores, np.ones(window) / window, mode='valid')
         reward_x = np.arange(window, len(episode_scores) + 1)
@@ -424,8 +424,7 @@ def plot_scores(episode_scores, episode_losses):
         reward_x = episodes
     plt.figure(figsize=(12, 5))
 
-    
-    plt.figure(figsize=(10, 5))
+
     plt.plot(episodes, episode_scores, alpha=0.35, label='Reward per Episode')
     plt.plot(reward_x, reward_ma, linewidth=2, label=f'{window}-Episode Moving Average')
     plt.title('Training Progress: Rewards')
@@ -530,8 +529,8 @@ def main():
             loss = agent.learn()
     
 
-            scores_window.append(reward)
-            episode_scores.append(reward)
+            # scores_window.append(reward)
+            # episode_scores.append(reward)
             if loss is not None:
                 episode_losses.append(loss)
             for event in pygame.event.get():
@@ -540,8 +539,8 @@ def main():
 
             if done:
                 episode_count += 1
-                scores_window.append(episode_return)
-                episode_scores.append(episode_return)
+                scores_window.append(episode_return)  # We want to keep track of the total reward for the episode, not just the last step's reward
+                episode_scores.append(episode_return) # We want to keep track of the total reward for the episode, not just the last step's reward
                 if loss is not None:
                     episode_losses.append(loss)
                 agent.decay_epsilon()
@@ -549,7 +548,11 @@ def main():
                 fish_x, fish_y, fish_heading, shark_x, shark_y, shark_vx, shark_vy = reset_positions()
 
        #Debugging
-        print(f'Episode: {episode_count}, Score: {np.mean(scores_window):.2f}, Loss: {np.mean(episode_losses[-100:]) if episode_losses else 0:.4f}, Epsilon: {agent.epsilon:.4f}')
+        # print(f'Episode: {episode_count}, Score: {np.mean(scores_window):.2f}, Loss: {np.mean(episode_losses[-100:]) if episode_losses else 0:.4f}, Epsilon: {agent.epsilon:.4f}')
+        # print(f'\rEpisode {episode_count}\tAverage Score: {np.mean(scores_window):.2f}', end='')
+        if episode_count > 0 and episode_count % 50 == 0:
+            print(f'\rEpisode {episode_count}\tAverage Score: {np.mean(scores_window):.2f}')
+            plot_scores(episode_scores, episode_losses)
 
         segments = segments_from_box((BOX_MARGIN, BOX_MARGIN), (WIDTH - BOX_MARGIN, HEIGHT - BOX_MARGIN))
         shark_segments = segments_from_shark((shark_x, shark_y), shark_heading)
