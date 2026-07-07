@@ -361,18 +361,69 @@ def calculate_relative_distance_from_bounds(fish_x, fish_y, box_margin, width, h
     distance_from_left_wall = fish_x - box_margin
     distance_from_right_wall = width - box_margin - fish_x
 
-    return distance_from_top_wall, distance_from_bottom_wall, distance_from_left_wall, distance_from_right_wall    
+    return distance_from_top_wall, distance_from_bottom_wall, distance_from_left_wall, distance_from_right_wall   
+
+
+def segments_from_other_fish(center, angle):
+    x,y = center
+    body_length = 90
+    body_height = 40
+    tail_length = 28
+
+    direction = (math.cos(angle), math.sin(angle))
+    perpendicular = (-direction[1], direction[0])
+
+    def point(forward, side):
+        return (
+            x + direction[0] * forward + perpendicular[0] * side,
+            y + direction[1] * forward + perpendicular[1] * side,
+        )
+    
+    body_points = [
+          point(-body_length * 0.5, 0),
+           point(-body_length * 0.25, body_height * 0.5),
+           point(body_length * 0.28, body_height * 0.43),
+           point(body_length * 0.5, 0),
+           point(body_length * 0.28, -body_height * 0.43),
+           point(-body_length * 0.25, -body_height * 0.5),
+      ]
+    
+    tail_base = point(-body_length * 0.5, 0)
+    tail_top = point(-body_length * 0.5 - tail_length, tail_length * 0.65)
+    tail_bottom = point(-body_length * 0.5 - tail_length, -tail_length * 0.65)
+    
+    segments = []
+    for i in range(len(body_points)):
+         segments.append([body_points[i], body_points[(i + 1) % len(body_points)]])
+    segments.append([tail_base, tail_top])
+    segments.append([tail_base, tail_bottom])
+
+
+    return segments
 #In main we willcreate the environment and run the simulation, we will also create the DQN agent and the replay buffer, and use them to train the fish to avoid the shark
-def get_state(fish_x, fish_y, fish_heading, shark_x, shark_y):
+def get_state(fish_x, fish_y, fish_heading, shark_x, shark_y, school, self_fish=None):
+    # Primary threat signal: the shark
     distance = calculate_relative_distance(fish_x, fish_y, shark_x, shark_y)
-    distance_from_top_wall, distance_from_bottom_wall, distance_from_left_wall, distance_from_right_wall = calculate_relative_distance_from_bounds(fish_x, fish_y, BOX_MARGIN, WIDTH, HEIGHT)
     angle = calculate_relative_angle(fish_x, fish_y, shark_x, shark_y) - fish_heading
-    velocity = 0 #We will add velocity later
+
+    distance_from_top_wall, distance_from_bottom_wall, distance_from_left_wall, distance_from_right_wall = calculate_relative_distance_from_bounds(fish_x, fish_y, BOX_MARGIN, WIDTH, HEIGHT)
+    velocity = 0  # We will add velocity later
+
+    # Rays are ALWAYS computed from this fish's own position.
+    # Other fish are added as obstacles (excluding self) so the fish can sense them.
     rays = generate_rays_fan((fish_x, fish_y), fish_heading, fov=math.pi / 2, num=20)
     segments = segments_from_box((BOX_MARGIN, BOX_MARGIN), (WIDTH - BOX_MARGIN, HEIGHT - BOX_MARGIN))
     shark_segments = segments_from_shark((shark_x, shark_y), calculate_relative_angle(fish_x, fish_y, shark_x, shark_y))
     segments.extend(shark_segments)
+    for fish in school:
+        if not fish.alive:
+            continue
+        if self_fish is not None and fish is self_fish:
+            continue
+        fish_segments = segments_from_other_fish((fish.x, fish.y), fish.heading)
+        segments.extend(fish_segments)
     segments = np.array(segments, dtype=float)
+
     intersections = raycast_rays_segments(rays, segments)
     closest_intersections = closest_intersection_from_raycast_rays_segments(intersections)
     ray_distances = np.linalg.norm(closest_intersections - np.array([fish_x, fish_y]), axis=1)
@@ -446,23 +497,20 @@ def compute_reward(fish_x, fish_y, shark_x, shark_y, prev_distance, ray_distance
 
 #A function for the shark to track the fish, stochastically, not too fast.
 #We will add some inertia to the shark's movement
+#We will make the shark choose a target fish position to track, and then move towards that position with some randomness
 def shark_track(fish_x, fish_y, shark_x, shark_y, shark_vx, shark_vy):
-    #Calculate the angle to the fish
-    angle_to_fish = calculate_relative_angle(shark_x, shark_y, fish_x, fish_y)
-    #Calculate the current angle of the shark's velocity
-    current_angle = np.arctan2(shark_vy, shark_vx)
-    #Calculate the difference between the two angles
-    angle_diff = angle_to_fish - current_angle
-    #Limit the angle difference to be between -pi and pi
-    angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi
-    #Now we will update the shark's velocity based on the angle difference, but we will limit the change in angle to be between -0.1 and 0.1 radians per frame
-    max_angle_change = 0.1
-    angle_change = np.clip(angle_diff, -max_angle_change, max_angle_change)
-    #Now we will update the shark's velocity based on the new angle
-    new_angle = current_angle + angle_change
-    shark_speed = 25.0
-    shark_vx = np.cos(new_angle) * shark_speed
-    shark_vy = np.sin(new_angle) * shark_speed
+    # Calculate the direction to the fish
+    direction_to_fish = np.array([fish_x - shark_x, fish_y - shark_y])
+    # Normalize the direction vector
+    distance_to_fish = np.linalg.norm(direction_to_fish)
+    #Find the minimumu distance to any fish in the school, and track that fish instead of the first fish in the list
+    if distance_to_fish > 0:
+        direction_to_fish = direction_to_fish / distance_to_fish
+        # Update the shark's velocity based on the direction to the fish, with some randomness
+        shark_speed = 7.0
+        randomness = np.random.uniform(-0.1, 0.1, size=2)  # Randomness in the direction
+        shark_vx = direction_to_fish[0] * shark_speed + randomness[0]
+        shark_vy = direction_to_fish[1] * shark_speed + randomness[1]
     return shark_vx, shark_vy
 
 #A strong normalised first state
@@ -473,7 +521,7 @@ def reset_positions():
 
     shark_x = BOX_MARGIN + 120
     shark_y = HEIGHT - BOX_MARGIN - 120
-    shark_speed = 25.0
+    shark_speed = 7.0
     shark_heading = -math.pi / 4
     shark_vx = math.cos(shark_heading) * shark_speed
     shark_vy = math.sin(shark_heading) * shark_speed
@@ -526,9 +574,9 @@ def plot_scores(episode_scores, episode_losses):
 
 
 
-def step(state, action, fish_x, fish_y, fish_heading, shark_x, shark_y):
-    #Update the fish's position and heading based on the action taken
-    fish_speed = 2.0
+def step(state, action, fish_x, fish_y, fish_heading, shark_x, shark_y, school, self_fish=None):
+    # Update the fish's position and heading based on the action taken
+    fish_speed = 3.0
     if action == 0: #turn left
         fish_heading -= 0.1
     elif action == 1: #turn right
@@ -541,23 +589,44 @@ def step(state, action, fish_x, fish_y, fish_heading, shark_x, shark_y):
         fish_x += fish_speed * math.cos(fish_heading)
         fish_y += fish_speed * math.sin(fish_heading)
 
-    #Calculate the new state and reward
-    new_state = get_state(fish_x, fish_y, fish_heading, shark_x, shark_y)
+    # Calculate the new state and reward
+    new_state = get_state(fish_x, fish_y, fish_heading, shark_x, shark_y, school, self_fish)
     
     prev_distance = state[0]  # The previous distance to the shark is the first element of the state
     distance = new_state[0]
     ray_distances = new_state[7:]  # The new ray distances are the elements from index 7 onwards
     reward = compute_reward(fish_x, fish_y, shark_x, shark_y, prev_distance, ray_distances)
 
-    done = False
-    if distance < 50: #If the fish is too close to the shark, it dies and the episode ends
-        done = True
+    # Penalise being too close to other fish so they spread out and avoid collisions
+    for fish in school:
+        if not fish.alive:
+            continue
+        if self_fish is not None and fish is self_fish:
+            continue
+        fish_distance = calculate_relative_distance(fish_x, fish_y, fish.x, fish.y)
+        if fish_distance < 30:
+            reward -= 0.1
+
+    done = check_collision(fish_x, fish_y, shark_x, shark_y)
 
     return new_state, reward, done, (fish_x, fish_y, fish_heading)
 
 
 import random
 from random import randint
+
+#Return the nearest alive fish to the shark, or None if the school is empty
+def nearest_alive_fish(school, shark_x, shark_y):
+    best = None
+    best_dist = float('inf')
+    for fish in school:
+        if not fish.alive:
+            continue
+        d = calculate_relative_distance(shark_x, shark_y, fish.x, fish.y)
+        if d < best_dist:
+            best_dist = d
+            best = fish
+    return best
 
 #Need to make training faster, so we will run multiple environmental updates per frame
 #Multiple training steps per frame, and multiple environment updates per frame, to speed up training
@@ -575,76 +644,63 @@ def main():
     pygame.display.set_caption("Fish Simulation")
     clock = pygame.time.Clock()
 
-    fish_x, fish_y, fish_heading, shark_x, shark_y, shark_vx, shark_vy = reset_positions()
+    shark_x = BOX_MARGIN + 120
+    shark_y = HEIGHT - BOX_MARGIN - 120
+    shark_heading = -math.pi / 4
+    shark_vx = math.cos(shark_heading) * 25.0
+    shark_vy = math.sin(shark_heading) * 25.0
+
     running = True
     episode_return = 0
     episode_count = 0
-    fish1 = {
-        "x": randint(BOX_MARGIN, WIDTH - BOX_MARGIN),
-        "y": randint(BOX_MARGIN, HEIGHT - BOX_MARGIN),
-        "heading": random.uniform(0, 2 * math.pi),
-        "alive": True,
-        "return": 0,
-    }
-    fish2 = {
-        "x": randint(BOX_MARGIN, WIDTH - BOX_MARGIN),
-        "y": randint(BOX_MARGIN, HEIGHT - BOX_MARGIN),
-        "heading": random.uniform(0, 2 * math.pi),
-        "alive": True,
-        "return": 0,
-    }
-    fish3 = {
-        "x": randint(BOX_MARGIN, WIDTH - BOX_MARGIN),
-        "y": randint(BOX_MARGIN, HEIGHT - BOX_MARGIN),
-        "heading": random.uniform(0, 2 * math.pi),
-        "alive": True,
-        "return": 0,
-    }
+   
+    class Fish:
+        def __init__(self, x, y, heading):
+            self.x = x
+            self.y = y
+            self.heading = heading
+            self.alive = True
+            self.return_value = 0
 
-
-
+    school = [Fish(randint(BOX_MARGIN, WIDTH - BOX_MARGIN), randint(BOX_MARGIN, HEIGHT - BOX_MARGIN), random.uniform(0, 2 * math.pi)) for _ in range(3)]
 
     while running:
-        dt = clock.tick(60) / 1000.0
+        dt = min(clock.tick(60) / 1000.0, 1.0 / 30.0)  # cap dt so the shark can't teleport on slow frames
         #Every frame, we will update the environment multiple times to speed up training
         for _ in range(5):  # Update the environment 5 times per frame
-            state = get_state(fish_x, fish_y, fish_heading, shark_x, shark_y)
-            action = agent.greedy_action(state)
-            fish_x, fish_y, fish_heading = apply_action(fish_x, fish_y, fish_heading, action)
+            for fish in school:
+                if not fish.alive:
+                    continue
+                state = get_state(fish.x, fish.y, fish.heading, shark_x, shark_y, school, self_fish=fish)
+                action = agent.greedy_action(state)
+                next_state, reward, done, (fish.x, fish.y, fish.heading) = step(state, action, fish.x, fish.y, fish.heading, shark_x, shark_y, school, self_fish=fish)
+                episode_return += reward
+                agent.memory.add(state, action, reward, next_state, done)
+                loss = agent.learn()
+                if loss is not None:
+                    episode_losses.append(loss)
+                if done:
+                    fish.alive = False
 
-           #Apply the shark's tracking behavior to update its position and velocity
-            shark_vx, shark_vy = shark_track(fish_x, fish_y, shark_x, shark_y, shark_vx, shark_vy)
-            shark_x += shark_vx * dt
-            shark_y += shark_vy * dt
 
 
-            shark_heading = math.atan2(shark_vy, shark_vx)
-            prev_distance = state[0]  # The previous distance to the shark is the first element of the state
-            ray_distances = get_state(fish_x, fish_y, fish_heading, shark_x, shark_y)[7:]  # Get the new ray distances
-            #Compute the reward and next state, and check if the episode is done
-            reward = compute_reward(fish_x, fish_y, shark_x, shark_y, prev_distance, ray_distances)
-            episode_return += reward
-            #Get the next state and check if the episode is done
-            next_state = get_state(fish_x, fish_y, fish_heading, shark_x, shark_y)
-            done = check_collision(fish_x, fish_y, shark_x, shark_y)
+            # Shark chases the nearest alive fish (not the old ghost fish)
+            target = nearest_alive_fish(school, shark_x, shark_y)
+            if target is not None:
+                shark_vx, shark_vy = shark_track(target.x, target.y, shark_x, shark_y, shark_vx, shark_vy)
+                shark_x += shark_vx * dt
+                shark_y += shark_vy * dt
+                shark_heading = math.atan2(shark_vy, shark_vx)
 
-            agent.memory.add(state, action, reward, next_state, done)
-            loss = agent.learn()
-    
-
-            # scores_window.append(reward)
-            # episode_scores.append(reward)
-            if loss is not None:
-                episode_losses.append(loss)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
 
-            if done:
+            # Only reset the whole school when EVERY fish is dead
+            if all(not fish.alive for fish in school):
                 episode_count += 1
                 scores_window.append(episode_return)
                 episode_scores.append(episode_return)
-                 #Debugging
                 if episode_count > 0 and episode_count % 50 == 0:
                     avg_score = np.mean(scores_window) if len(scores_window) > 0 else 0
                     avg_loss = np.mean(episode_losses[-100:]) if episode_losses else 0
@@ -654,22 +710,26 @@ def main():
                     plot_scores(episode_scores, episode_losses)
                 agent.decay_epsilon()
                 episode_return = 0
-                fish_x, fish_y, fish_heading, shark_x, shark_y, shark_vx, shark_vy = reset_positions()
+                school = [Fish(randint(BOX_MARGIN, WIDTH - BOX_MARGIN), randint(BOX_MARGIN, HEIGHT - BOX_MARGIN), random.uniform(0, 2 * math.pi)) for _ in range(3)]
+                shark_x = BOX_MARGIN + 120
+                shark_y = HEIGHT - BOX_MARGIN - 120
+                shark_heading = -math.pi / 4
+                shark_vx = math.cos(shark_heading) * 25.0
+                shark_vy = math.sin(shark_heading) * 25.0
 
       
         
 
 
+        # Build segments for raycasting: box + shark + other fish
         segments = segments_from_box((BOX_MARGIN, BOX_MARGIN), (WIDTH - BOX_MARGIN, HEIGHT - BOX_MARGIN))
         shark_segments = segments_from_shark((shark_x, shark_y), shark_heading)
-        fish_segments = segements_from_other_fish((fish_x, fish_y), fish_heading)
         segments.extend(shark_segments)
-        segments.extend(fish_segments)
+        for fish in school:
+            if fish.alive:
+                fish_segments = segments_from_other_fish((fish.x, fish.y), fish.heading)
+                segments.extend(fish_segments)
         segments = np.array(segments, dtype=float)
-
-        rays = generate_rays_fan((fish_x, fish_y), fish_heading, fov=math.pi / 2, num=20)
-        intersections = raycast_rays_segments(rays, segments)
-        closest_intersections = closest_intersection_from_raycast_rays_segments(intersections)
 
         screen.fill(BG_COLOR)
         pygame.draw.rect(
@@ -680,16 +740,21 @@ def main():
         )
 
         draw_shark(screen, (shark_x, shark_y), shark_heading)
-        draw_fish(screen, (fish_x, fish_y), fish_heading)
-
-        for intersection in closest_intersections:
-            pygame.draw.line(
-                screen,
-                (255, 0, 0),
-                (int(fish_x), int(fish_y)),
-                (int(intersection[0]), int(intersection[1])),
-                1,
-            )
+        for fish in school:
+            if fish.alive:
+                draw_fish(screen, (fish.x, fish.y), fish.heading)
+                # Draw THIS fish's rays from its own position
+                rays = generate_rays_fan((fish.x, fish.y), fish.heading, fov=math.pi / 2, num=20)
+                intersections = raycast_rays_segments(rays, segments)
+                closest_intersections = closest_intersection_from_raycast_rays_segments(intersections)
+                for intersection in closest_intersections:
+                    pygame.draw.line(
+                        screen,
+                        (255, 0, 0),
+                        (int(fish.x), int(fish.y)),
+                        (int(intersection[0]), int(intersection[1])),
+                        1,
+                    )
 
         pygame.display.flip()
 
