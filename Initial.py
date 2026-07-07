@@ -207,6 +207,44 @@ def segments_from_shark(center, angle):
    return segments
 
 
+def segements_from_other_fish(center, angle):
+       x,y = center
+       body_length = 90
+       body_height = 40
+       tail_length = 28
+
+       direction = (math.cos(angle), math.sin(angle))
+       perpendicular = (-direction[1], direction[0])
+
+       def point(forward, side):
+           return (
+               x + direction[0] * forward + perpendicular[0] * side,
+               y + direction[1] * forward + perpendicular[1] * side,
+           )
+       
+       body_points = [
+             point(-body_length * 0.5, 0),
+              point(-body_length * 0.25, body_height * 0.5),
+              point(body_length * 0.28, body_height * 0.43),
+              point(body_length * 0.5, 0),
+              point(body_length * 0.28, -body_height * 0.43),
+              point(-body_length * 0.25, -body_height * 0.5),
+         ]
+       
+       tail_base = point(-body_length * 0.5, 0)
+       tail_top = point(-body_length * 0.5 - tail_length, tail_length * 0.65)
+       tail_bottom = point(-body_length * 0.5 - tail_length, -tail_length * 0.65)
+       
+       segments = []
+       for i in range(len(body_points)):
+            segments.append([body_points[i], body_points[(i + 1) % len(body_points)]])
+       segments.append([tail_base, tail_top])
+       segments.append([tail_base, tail_bottom])
+
+
+       return segments
+
+
 
 
 def draw_segments(screen, segments):
@@ -330,7 +368,22 @@ def get_state(fish_x, fish_y, fish_heading, shark_x, shark_y):
     distance_from_top_wall, distance_from_bottom_wall, distance_from_left_wall, distance_from_right_wall = calculate_relative_distance_from_bounds(fish_x, fish_y, BOX_MARGIN, WIDTH, HEIGHT)
     angle = calculate_relative_angle(fish_x, fish_y, shark_x, shark_y) - fish_heading
     velocity = 0 #We will add velocity later
-    return np.array([distance, angle, velocity, distance_from_top_wall, distance_from_bottom_wall, distance_from_left_wall, distance_from_right_wall], dtype=np.float32)
+    rays = generate_rays_fan((fish_x, fish_y), fish_heading, fov=math.pi / 2, num=20)
+    segments = segments_from_box((BOX_MARGIN, BOX_MARGIN), (WIDTH - BOX_MARGIN, HEIGHT - BOX_MARGIN))
+    shark_segments = segments_from_shark((shark_x, shark_y), calculate_relative_angle(fish_x, fish_y, shark_x, shark_y))
+    segments.extend(shark_segments)
+    segments = np.array(segments, dtype=float)
+    intersections = raycast_rays_segments(rays, segments)
+    closest_intersections = closest_intersection_from_raycast_rays_segments(intersections)
+    ray_distances = np.linalg.norm(closest_intersections - np.array([fish_x, fish_y]), axis=1)
+    # Pad ray_distances to ensure consistent size (20 rays)
+    if len(ray_distances) < 20:
+        ray_distances = np.concatenate([ray_distances, np.full(20 - len(ray_distances), np.inf)])
+                                                            
+    return np.array([distance, angle, velocity, distance_from_top_wall, distance_from_bottom_wall, distance_from_left_wall, distance_from_right_wall, *ray_distances], dtype=np.float32)
+
+
+
 
 def apply_action(fish_x, fish_y, fish_heading, action):
     fish_speed = 2.0
@@ -362,13 +415,33 @@ def check_collision(fish_x, fish_y, shark_x, shark_y):
 #Give an extra reward every 250 frames for surviving
 #Upon death, reset the fish to the center of the screen and reset the shark to a random position
 #Penalise the fish for going out of bounds, and reward it for staying within the box
-def compute_reward(fish_x, fish_y, shark_x, shark_y, prev_distance):
+def compute_reward(fish_x, fish_y, shark_x, shark_y, prev_distance, ray_distances):
     distance = calculate_relative_distance(fish_x, fish_y, shark_x, shark_y)
+    
+    # Handle NaN/inf in ray distances
+    ray_distances = np.array(ray_distances)
+    ray_distances = ray_distances[np.isfinite(ray_distances)]
+    
+    if len(ray_distances) == 0:
+        min_ray = float('inf')
+    else:
+        min_ray = np.min(ray_distances)
+    
+    # Collision penalties (clipped to keep Q-values stable)
     if distance < 50:
-        return -1000  # collision penalty
-    # Reward for increasing distance (moving away)
-    reward = (distance - prev_distance) * 0.1
-    reward += 1  # small survival bonus
+        return -10.0  # Shark collision
+    if min_ray < 10:
+        return -5.0   # Too close to obstacle (wall or shark)
+    
+    # Shaped reward: reward INCREASING distance from the shark (delta).
+    # This breaks the "stay still in the centre" local optimum, because if the
+    # fish does nothing the shark keeps approaching and delta goes negative.
+    delta = distance - prev_distance
+    reward = delta * 0.3 # Scale the reward to keep it in a reasonable range
+    
+    # Tiny survival bonus to encourage longer episodes
+    reward += 0.10 # Increase this to 0.1 to encourage longer survival
+    
     return reward
 
 #A function for the shark to track the fish, stochastically, not too fast.
@@ -430,10 +503,10 @@ def plot_scores(episode_scores, episode_losses):
     plt.title('Training Progress: Rewards')
     plt.xlabel('Episode')
     plt.ylabel('Total Reward')
-    plt.xlim(0, 1000)
     plt.legend()
     plt.grid(True, alpha=0.3)
-    plt.show()
+    plt.savefig('training_rewards.png', dpi=150, bbox_inches='tight')
+    plt.close()
 
 
     if len(episode_losses) >= window:
@@ -445,11 +518,10 @@ def plot_scores(episode_scores, episode_losses):
         plt.title('Training Progress: Loss')
         plt.xlabel('Episode')
         plt.ylabel('Loss')
-        plt.xlim(0, 1000)
         plt.legend()
         plt.grid(True, alpha=0.3)
-        plt.show()
-    plt.show()
+        plt.savefig('training_losses.png', dpi=150, bbox_inches='tight')
+        plt.close()
 
 
 
@@ -471,9 +543,11 @@ def step(state, action, fish_x, fish_y, fish_heading, shark_x, shark_y):
 
     #Calculate the new state and reward
     new_state = get_state(fish_x, fish_y, fish_heading, shark_x, shark_y)
+    
     prev_distance = state[0]  # The previous distance to the shark is the first element of the state
     distance = new_state[0]
-    reward = compute_reward(fish_x, fish_y, shark_x, shark_y, prev_distance)
+    ray_distances = new_state[7:]  # The new ray distances are the elements from index 7 onwards
+    reward = compute_reward(fish_x, fish_y, shark_x, shark_y, prev_distance, ray_distances)
 
     done = False
     if distance < 50: #If the fish is too close to the shark, it dies and the episode ends
@@ -482,11 +556,14 @@ def step(state, action, fish_x, fish_y, fish_heading, shark_x, shark_y):
     return new_state, reward, done, (fish_x, fish_y, fish_heading)
 
 
+import random
+from random import randint
+
 #Need to make training faster, so we will run multiple environmental updates per frame
 #Multiple training steps per frame, and multiple environment updates per frame, to speed up training
 def main():
     action_space = 5
-    state_space = 7
+    state_space = 27  # 7 base features + 20 ray distances
     agent = DQNAgent(state_size=state_space, action_size=action_space)
 
     scores_window = deque(maxlen=100)
@@ -502,6 +579,31 @@ def main():
     running = True
     episode_return = 0
     episode_count = 0
+    fish1 = {
+        "x": randint(BOX_MARGIN, WIDTH - BOX_MARGIN),
+        "y": randint(BOX_MARGIN, HEIGHT - BOX_MARGIN),
+        "heading": random.uniform(0, 2 * math.pi),
+        "alive": True,
+        "return": 0,
+    }
+    fish2 = {
+        "x": randint(BOX_MARGIN, WIDTH - BOX_MARGIN),
+        "y": randint(BOX_MARGIN, HEIGHT - BOX_MARGIN),
+        "heading": random.uniform(0, 2 * math.pi),
+        "alive": True,
+        "return": 0,
+    }
+    fish3 = {
+        "x": randint(BOX_MARGIN, WIDTH - BOX_MARGIN),
+        "y": randint(BOX_MARGIN, HEIGHT - BOX_MARGIN),
+        "heading": random.uniform(0, 2 * math.pi),
+        "alive": True,
+        "return": 0,
+    }
+
+
+
+
     while running:
         dt = clock.tick(60) / 1000.0
         #Every frame, we will update the environment multiple times to speed up training
@@ -518,8 +620,9 @@ def main():
 
             shark_heading = math.atan2(shark_vy, shark_vx)
             prev_distance = state[0]  # The previous distance to the shark is the first element of the state
+            ray_distances = get_state(fish_x, fish_y, fish_heading, shark_x, shark_y)[7:]  # Get the new ray distances
             #Compute the reward and next state, and check if the episode is done
-            reward = compute_reward(fish_x, fish_y, shark_x, shark_y, prev_distance)
+            reward = compute_reward(fish_x, fish_y, shark_x, shark_y, prev_distance, ray_distances)
             episode_return += reward
             #Get the next state and check if the episode is done
             next_state = get_state(fish_x, fish_y, fish_heading, shark_x, shark_y)
@@ -539,24 +642,29 @@ def main():
 
             if done:
                 episode_count += 1
-                scores_window.append(episode_return)  # We want to keep track of the total reward for the episode, not just the last step's reward
-                episode_scores.append(episode_return) # We want to keep track of the total reward for the episode, not just the last step's reward
-                if loss is not None:
-                    episode_losses.append(loss)
+                scores_window.append(episode_return)
+                episode_scores.append(episode_return)
+                 #Debugging
+                if episode_count > 0 and episode_count % 50 == 0:
+                    avg_score = np.mean(scores_window) if len(scores_window) > 0 else 0
+                    avg_loss = np.mean(episode_losses[-100:]) if episode_losses else 0
+                    print(f'Episode {episode_count}: Avg Score={avg_score:.2f}, Loss={avg_loss:.4f}, Epsilon={agent.epsilon:.4f}')
+
+                if episode_count >= 250 and episode_count % 250 == 0:
+                    plot_scores(episode_scores, episode_losses)
                 agent.decay_epsilon()
                 episode_return = 0
                 fish_x, fish_y, fish_heading, shark_x, shark_y, shark_vx, shark_vy = reset_positions()
 
-       #Debugging
-        # print(f'Episode: {episode_count}, Score: {np.mean(scores_window):.2f}, Loss: {np.mean(episode_losses[-100:]) if episode_losses else 0:.4f}, Epsilon: {agent.epsilon:.4f}')
-        # print(f'\rEpisode {episode_count}\tAverage Score: {np.mean(scores_window):.2f}', end='')
-        if episode_count > 0 and episode_count % 50 == 0:
-            print(f'\rEpisode {episode_count}\tAverage Score: {np.mean(scores_window):.2f}')
-            plot_scores(episode_scores, episode_losses)
+      
+        
+
 
         segments = segments_from_box((BOX_MARGIN, BOX_MARGIN), (WIDTH - BOX_MARGIN, HEIGHT - BOX_MARGIN))
         shark_segments = segments_from_shark((shark_x, shark_y), shark_heading)
+        fish_segments = segements_from_other_fish((fish_x, fish_y), fish_heading)
         segments.extend(shark_segments)
+        segments.extend(fish_segments)
         segments = np.array(segments, dtype=float)
 
         rays = generate_rays_fan((fish_x, fish_y), fish_heading, fov=math.pi / 2, num=20)
@@ -585,15 +693,10 @@ def main():
 
         pygame.display.flip()
 
-        if done:
-            scores_window.append(episode_return)
-            episode_scores.append(episode_return)
-            agent.decay_epsilon()
-            fish_x, fish_y, fish_heading, shark_x, shark_y, shark_vx, shark_vy = reset_positions()
-            episode_return = 0
     pygame.quit()
     sys.exit()
 
 
 if __name__ == "__main__":
     main()
+    

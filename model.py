@@ -116,9 +116,15 @@ class DQNAgent:
 
         # Compute loss
         loss = F.mse_loss(Q_expected, Q_targets)
+        # Guard against NaN/Inf (e.g. from unstable targets)
+        if torch.isnan(loss) or torch.isinf(loss):
+            self.optimizer.zero_grad()
+            return None
         # Minimize the loss
         self.optimizer.zero_grad()
         loss.backward()
+        # Clip gradients to prevent explosion
+        torch.nn.utils.clip_grad_norm_(self.qnetwork_local.parameters(), 1.0)
         self.optimizer.step()   
 
         #Soft update the target network
