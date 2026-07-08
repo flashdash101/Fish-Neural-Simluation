@@ -512,7 +512,7 @@ def compute_reward(fish_x, fish_y, shark_x, shark_y, prev_distance, ray_distance
 #A function for the shark to track the fish, stochastically, not too fast.
 #We will add some inertia to the shark's movement
 #We will make the shark choose a target fish position to track, and then move towards that position with some randomness
-def shark_track(fish_x, fish_y, shark_x, shark_y, shark_vx, shark_vy):
+def shark_track(fish_x, fish_y, shark_x, shark_y, shark_vx, shark_vy, episode_count):
     # Calculate the direction to the fish
     direction_to_fish = np.array([fish_x - shark_x, fish_y - shark_y])
     # Normalize the direction vector
@@ -520,28 +520,12 @@ def shark_track(fish_x, fish_y, shark_x, shark_y, shark_vx, shark_vy):
     #Find the minimumu distance to any fish in the school, and track that fish instead of the first fish in the list
     if distance_to_fish > 0:
         direction_to_fish = direction_to_fish / distance_to_fish
-        # Update the shark's velocity based on the direction to the fish, with some randomness
-        shark_speed = 7.0
+        # Curriculum: start at 8.5, increase by 1 every 50 episodes, cap at 13.
+        shark_speed = min(13.0, 8.5 + (episode_count // 50))
         randomness = np.random.uniform(-0.1, 0.1, size=2)  # Randomness in the direction
         shark_vx = direction_to_fish[0] * shark_speed + randomness[0]
         shark_vy = direction_to_fish[1] * shark_speed + randomness[1]
     return shark_vx, shark_vy
-
-#A strong normalised first state
-def reset_positions():
-    fish_x = WIDTH // 2
-    fish_y = HEIGHT // 2
-    fish_heading = 0
-
-    shark_x = BOX_MARGIN + 120
-    shark_y = HEIGHT - BOX_MARGIN - 120
-    shark_speed = 7.0
-    shark_heading = -math.pi / 4
-    shark_vx = math.cos(shark_heading) * shark_speed
-    shark_vy = math.sin(shark_heading) * shark_speed
-
-    return fish_x, fish_y, fish_heading, shark_x, shark_y, shark_vx, shark_vy
-
 
 #Plot progress from 0 to n episodes, with a moving average of 10 episodes for easier reading.
 def plot_scores(episode_scores, episode_losses):
@@ -715,7 +699,7 @@ def main():
             # Shark chases the nearest alive fish (not the old ghost fish)
             target = nearest_alive_fish(school, shark_x, shark_y)
             if target is not None:
-                shark_vx, shark_vy = shark_track(target.x, target.y, shark_x, shark_y, shark_vx, shark_vy)
+                shark_vx, shark_vy = shark_track(target.x, target.y, shark_x, shark_y, shark_vx, shark_vy, episode_count)
                 shark_x += shark_vx * dt
                 shark_y += shark_vy * dt
                 shark_heading = math.atan2(shark_vy, shark_vx)
