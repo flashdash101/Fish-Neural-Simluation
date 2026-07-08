@@ -606,9 +606,7 @@ def step(state, action, fish_x, fish_y, fish_heading, shark_x, shark_y, school, 
     elif action == 4: #speed up
         fish_x += fish_speed * math.cos(fish_heading)
         fish_y += fish_speed * math.sin(fish_heading)
-    elif action == 5: #move backwards
-        fish_x -= fish_speed * math.cos(fish_heading)
-        fish_y -= fish_speed * math.sin(fish_heading)
+    
 
     # Calculate the new state and reward
     new_state = get_state(fish_x, fish_y, fish_heading, shark_x, shark_y, school, self_fish)
@@ -652,7 +650,7 @@ def nearest_alive_fish(school, shark_x, shark_y):
 #Need to make training faster, so we will run multiple environmental updates per frame
 #Multiple training steps per frame, and multiple environment updates per frame, to speed up training
 def main():
-    action_space = 6
+    action_space = 5
     state_space = 15  # 7 base features + 8 ray distances
     agent = DQNAgent(state_size=state_space, action_size=action_space)
 
@@ -676,6 +674,7 @@ def main():
     episode_count = 0
     episode_loss_sum = 0.0
     episode_loss_steps = 0
+    frame_count = 0
    
     class Fish:
         def __init__(self, x, y, heading):
@@ -699,7 +698,12 @@ def main():
                 next_state, reward, done, (fish.x, fish.y, fish.heading) = step(state, action, fish.x, fish.y, fish.heading, shark_x, shark_y, school, self_fish=fish)
                 episode_return += reward
                 agent.memory.add(state, action, reward, next_state, done)
-                loss = agent.learn()
+                #Learn every 3rd frame
+                if len(agent.memory) > 64 and frame_count % 3 == 0:
+                    loss = agent.learn()
+                else:
+                    loss = None
+
                 if loss is not None:
                     episode_loss_sum += loss
                     episode_loss_steps += 1
@@ -773,17 +777,21 @@ def main():
                 fish_segments = np.array(fish_segments, dtype=float)
 
                 # Draw THIS fish's rays from its own position.
-                rays = generate_rays_fan((fish.x, fish.y), fish.heading, fov=math.pi / 2, num=8)
-                intersections = raycast_rays_segments(rays, fish_segments)
-                closest_intersections = closest_intersection_from_raycast_rays_segments(intersections)
-                for intersection in closest_intersections:
-                    pygame.draw.line(
-                        screen,
-                        (255, 0, 0),
-                        (int(fish.x), int(fish.y)),
-                        (int(intersection[0]), int(intersection[1])),
-                        1,
-                    )
+                #Draw the rays for the fish every 3rd frame, to speed up training and reduce rendering load
+                if frame_count % 3 == 0:
+                    rays = generate_rays_fan((fish.x, fish.y), fish.heading, fov=math.pi / 2, num=8)
+                    intersections = raycast_rays_segments(rays, fish_segments)
+                    closest_intersections = closest_intersection_from_raycast_rays_segments(intersections)
+                    for intersection in closest_intersections:
+                        pygame.draw.line(
+                            screen,
+                            (255, 0, 0),
+                            (int(fish.x), int(fish.y)),
+                            (int(intersection[0]), int(intersection[1])),
+                            1,
+                        )
+
+        frame_count += 1
 
         pygame.display.flip()
 
