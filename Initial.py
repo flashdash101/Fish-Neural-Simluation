@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F 
 from model import DQNAgent, ReplayBuffer, QNetwork
 from collections import deque
-WIDTH, HEIGHT = 800, 600
+WIDTH, HEIGHT = 800, 800
 BG_COLOR = (18, 24, 38)
 FISH_COLOR = (240, 170, 70)
 FIN_COLOR = (220, 120, 40)
@@ -483,13 +483,13 @@ def compute_reward(fish_x, fish_y, shark_x, shark_y, prev_distance, ray_distance
     if distance < 50:
         return -10.0
     if wall_distance < 0:
-        return -10.0
+        return -15.0 #Increased from -10.0 to -15.0 to make the fish more cautious about going out of bounds
 
     # Smooth wall penalty: only kicks in within 40px of a wall, gentle slope.
     # This gives gradual warning without penalising most of the box.
     wall_penalty = 0.0
     if wall_distance < 40:
-        wall_penalty = (40 - wall_distance) * 0.02  # max ~0.8 at the wall
+        wall_penalty = (40 - wall_distance) * 0.1  # max ~1.0 at the wall
 
     # Smooth obstacle penalty from rays (shark body / other fish)
     obstacle_penalty = 0.0
@@ -506,7 +506,7 @@ def compute_reward(fish_x, fish_y, shark_x, shark_y, prev_distance, ray_distance
 
     reward = shark_reward - wall_penalty - obstacle_penalty + survival
     # Clip total reward to keep Q-values bounded and training stable.
-    reward = max(-10.0, min(2.0, reward))
+    reward = max(-15.0, min(2.0, reward))
     return reward
 
 #A function for the shark to track the fish, stochastically, not too fast.
@@ -521,7 +521,7 @@ def shark_track(fish_x, fish_y, shark_x, shark_y, shark_vx, shark_vy, episode_co
     if distance_to_fish > 0:
         direction_to_fish = direction_to_fish / distance_to_fish
         # Curriculum: start at 8.5, increase by 1 every 50 episodes, cap at 13.
-        shark_speed = min(13.0, 8.5 + (episode_count // 50))
+        shark_speed = min(13.0, 8.5 + (episode_count // 125))
         randomness = np.random.uniform(-0.1, 0.1, size=2)  # Randomness in the direction
         shark_vx = direction_to_fish[0] * shark_speed + randomness[0]
         shark_vy = direction_to_fish[1] * shark_speed + randomness[1]
@@ -721,7 +721,7 @@ def main():
                     avg_score = np.mean(scores_window) if len(scores_window) > 0 else 0
                     avg_loss = episode_losses[-1] if episode_losses else 0
                     print(f'Episode {episode_count}: Avg Score={avg_score:.2f}, Loss={avg_loss:.4f}, Epsilon={agent.epsilon:.4f}')
-
+        
                 if episode_count >= 500 and episode_count % 500 == 0:
                     plot_scores(episode_scores, episode_losses)
                 agent.decay_epsilon()
