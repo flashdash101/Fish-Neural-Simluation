@@ -45,7 +45,12 @@ class QNetwork(nn.Module):
     
 #Create the DQN agent class that will use the Q network and the replay buffer to train the fish to avoid the shark
 class DQNAgent:
-    def __init__(self, state_size, action_size):
+    def __init__(self, state_size, action_size, device=None):
+        # Auto-detect GPU if available
+        if device is None:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = torch.device(device)
         
         self.state_size = state_size
         self.action_size = action_size
@@ -60,9 +65,9 @@ class DQNAgent:
         self.epsilon_min = 0.01
         self.epsilon_decay = 0.999
 
-        # Networks
-        self.qnetwork_local = QNetwork(state_size, action_size)
-        self.qnetwork_target = QNetwork(state_size, action_size)
+        # Networks — moved to GPU if available
+        self.qnetwork_local = QNetwork(state_size, action_size).to(self.device)
+        self.qnetwork_target = QNetwork(state_size, action_size).to(self.device)
 
         self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=self.lr)
         self.memory = ReplayBuffer(self.buffer_size, self.batch_size)
@@ -73,7 +78,7 @@ class DQNAgent:
 
 #Define the epsilon greedy action selection method for the DQN agent
     def greedy_action(self, state):
-        state = torch.from_numpy(state).float().unsqueeze(0)
+        state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
         self.qnetwork_local.eval()
         with torch.no_grad():
             action_values = self.qnetwork_local(state)
@@ -100,11 +105,11 @@ class DQNAgent:
             return
         states, actions, rewards, next_states, dones = zip(*experiences)
 
-        states = torch.from_numpy(np.vstack(states)).float()
-        actions = torch.from_numpy(np.vstack(actions)).long()
-        rewards = torch.from_numpy(np.vstack(rewards)).float()
-        next_states = torch.from_numpy(np.vstack(next_states)).float()
-        dones = torch.from_numpy(np.vstack(dones).astype(np.uint8)).float()
+        states = torch.from_numpy(np.vstack(states)).float().to(self.device)
+        actions = torch.from_numpy(np.vstack(actions)).long().to(self.device)
+        rewards = torch.from_numpy(np.vstack(rewards)).float().to(self.device)
+        next_states = torch.from_numpy(np.vstack(next_states)).float().to(self.device)
+        dones = torch.from_numpy(np.vstack(dones).astype(np.uint8)).float().to(self.device)
 
         # Get max predicted Q values (for next states) from target model
         Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(1)
@@ -124,7 +129,7 @@ class DQNAgent:
         self.optimizer.zero_grad()
         loss.backward()
         # Clip gradients to prevent explosion
-        torch.nn.utils.clip_grad_norm_(self.qnetwork_local.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(self.qnetwork_local.parameters(), max_norm=1.0) #Added gradient clipping to prevent exploding gradients
         self.optimizer.step()   
 
         #Soft update the target network

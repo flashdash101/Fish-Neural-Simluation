@@ -2,6 +2,7 @@
 run_ablation.py
 Runs the ablation study over school sizes and ray counts.
 Saves per-episode data to CSV and best weights to .pth for each run.
+
 """
 
 import csv
@@ -9,26 +10,45 @@ import os
 import random
 import numpy as np
 import torch
-from Initial import main  # our modified main()
+import shutil
+from Initial_copy import main  # our modified main()
 
-# ── Configurations ───────────────────────────────────────────
-# ── Configurations ───────────────────────────────────────────
-# Higher-school sweep (school >= 2). The 6 school=1 runs are already
-# done and will be skipped by the resume logic. To restore the full
-# study later, add (1, 12) back and set SEEDS = [42, 43, 44].
-CONFIGS = [
-    # (school_size, ray_count)
-    (2, 4),
-    (2, 8),
-    (4, 4),
-]
-SEEDS = [42]
-NUM_EPISODES = 500
+# ── Google Drive sync (Colab only) ──────────────────────────
+# Set to True to redirect results to Google Drive for persistence.
+USE_DRIVE = False  # change to True in Colab before running
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-RAW_DIR = os.path.join(BASE_DIR, "results", "raw")
-WEIGHTS_DIR = os.path.join(BASE_DIR, "results", "weights")
+
+if USE_DRIVE:
+    # Verify Drive is actually mounted (not just a local path)
+    if not os.path.exists("/content/drive/MyDrive"):
+        print("ERROR: Drive not mounted! Run this in a Colab cell first:")
+        print("    from google.colab import drive")
+        print("    drive.mount('/content/drive')")
+        print("Falling back to local results/ folder instead.")
+        USE_DRIVE = False
+        RAW_DIR = os.path.join(BASE_DIR, "results", "raw")
+        WEIGHTS_DIR = os.path.join(BASE_DIR, "results", "weights")
+    else:
+        DRIVE_BASE = "/content/drive/MyDrive/fish_simulation_results"
+        RAW_DIR = os.path.join(DRIVE_BASE, "raw")
+        WEIGHTS_DIR = os.path.join(DRIVE_BASE, "weights")
+        print(f"Drive mode ON — results will persist at {DRIVE_BASE}/")
+else:
+    RAW_DIR = os.path.join(BASE_DIR, "results", "raw")
+    WEIGHTS_DIR = os.path.join(BASE_DIR, "results", "weights")
+
 os.makedirs(RAW_DIR, exist_ok=True)
 os.makedirs(WEIGHTS_DIR, exist_ok=True)
+
+# ── Configurations ───────────────────────────────────────────
+# n configs × k seeds = n * k runs.
+CONFIGS = [
+    # (2, 4),
+    (2,8)      # re-run: only 500 rows, needs full 650
+]
+# k seeds per config for testing; use [42,43,44] for full ablation
+SEEDS = [44]  
 
 
 def entropy(counts):
@@ -71,12 +91,22 @@ def run_config(school_size, ray_count, seed):
                 round(data["shark_dist_avgs"][ep], 2) if ep < len(data["shark_dist_avgs"]) else "",
             ])
 
-    # Save best weights
+    # Save best weights — copy to both local results/ AND Drive (if enabled).
     best_weights_src = os.path.join(BASE_DIR, "best_weights.pth")
     if os.path.exists(best_weights_src):
-        dst = os.path.join(WEIGHTS_DIR, f"school{school_size}_rays{ray_count}_seed{seed}_best.pth")
-        os.replace(best_weights_src, dst)
-        print(f"  Saved weights to {dst}")
+        # Always save a local copy
+        local_dst = os.path.join(BASE_DIR, "results", "weights",
+                                 f"school{school_size}_rays{ray_count}_seed{seed}_best.pth")
+        os.makedirs(os.path.dirname(local_dst), exist_ok=True)
+        shutil.copy2(best_weights_src, local_dst)
+        print(f"  Saved weights to {local_dst}")
+        # If Drive is enabled, also save there (shutil.copy2 handles cross-device)
+        if USE_DRIVE:
+            drive_dst = os.path.join(WEIGHTS_DIR,
+                                     f"school{school_size}_rays{ray_count}_seed{seed}_best.pth")
+            os.makedirs(os.path.dirname(drive_dst), exist_ok=True)
+            shutil.copy2(best_weights_src, drive_dst)
+            print(f"  Saved weights to Drive: {drive_dst}")
 
     print(f"  Done – {len(data['episode_scores'])} episodes")
     return data
@@ -106,7 +136,7 @@ def run_ablation(skip_existing=True):
                 import traceback
                 traceback.print_exc()
 
-    print("\n All runs complete. Results in results/raw/")
+    print(f"\n All runs complete. Results in {RAW_DIR}/")
 
 
 if __name__ == "__main__":
